@@ -234,7 +234,7 @@ The traffic,
 ![tls-flow](images/image2.png)
 
 
-## Example Shellcode Delivery
+## Example Shellcode Delivery
 
 Server,
 ```
