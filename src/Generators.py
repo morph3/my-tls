@@ -16,7 +16,6 @@ import hmac, hashlib, struct, os
 from Crypto.Cipher import AES
 
 
-
 class TlsMessageGenerator:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -51,17 +50,14 @@ class TlsMessageGenerator:
         reneg_ext = b"\xff\x01" + (1).to_bytes(2, 'big') + b"\x00"
         extensions = reneg_ext
 
-        # custom extension
-        extension_type = b"\xde\xad"
-        extension_data = self.ctx.SHELLCODE # placeholder
-        extension_data_len = len(extension_data).to_bytes(2, 'big')
-
-        extensions += extension_type + extension_data_len + extension_data
+        if self.ctx.SHELLCODE:
+            # if shellcode is set, add custom extension
+            extension_type = b"\xBE\xEF" # BEEF
+            extension_data = self.ctx.SHELLCODE # placeholder
+            extension_data_len = len(extension_data).to_bytes(2, 'big')
+            extensions += extension_type + extension_data_len + extension_data
 
         extensions_len = len(extensions).to_bytes(2, 'big')
-
-
-
 
         msg = (
             version +
@@ -103,7 +99,6 @@ class TlsMessageGenerator:
         length = len(msg).to_bytes(3, 'big')
         cert_msg = handshake_type + length + msg
         return self.generate_tls_record(cert_msg)
-
 
     def generate_client_hello(self):
         # Handshake Protocol: ClientHello
@@ -272,7 +267,6 @@ class TlsMessageGenerator:
         #hexdump.hexdump(client_hello_msg)
         return self.generate_tls_record(client_hello_msg)    
     
-
     def generate_application_data(self, msg):
         """
         Generate an application data record.
@@ -356,113 +350,6 @@ class TlsMessageGenerator:
             print(f"Encrypted Pre-Master Secret: {encrypted_pre_master_secret.hex()}")
             return self.generate_tls_record(handshake_message)
 
-
-        if int.from_bytes(self.ctx.AGGREED_CIPHER_SUITE, byteorder='big') == self.ctx.CIPHER_SUITES["TLS_RSA_WITH_AES_128_GCM_SHA256"]:
-            for server_cert in self.ctx.SERVER_CERTIFICATES:
-                cert = load_der_x509_certificate(server_cert)
-                subject = cert.subject.rfc4514_string()  # Get subject as a string
-                print(f"Certificate Subject: {subject}")
-
-                # Check if the certificate matches the server domain
-                if self.ctx.CN in subject:
-                    print(f"[!] Using cert {cert} with CN {subject}")
-                    break
-            else:
-                raise ValueError("No matching server certificate found!")
-
-            server_public_key = cert.public_key()
-            print(f"[!] Using server public key:\n{server_public_key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo).decode()}")
-            # generate pre-master secret
-            pre_master_secret = (
-                bytes(protocol_version) + os.urandom(46)  # 48 bytes: 2 bytes for version + 46 random bytes
-            )
-
-            # encrypt the pre-master secret with the server's public key
-            encrypted_pre_master_secret = server_public_key.encrypt(
-                pre_master_secret,
-                padding.PKCS1v15()
-            )
-
-            # Ensure correct length (typically 256 bytes for a 2048-bit RSA key)
-            encrypted_pms_length = len(encrypted_pre_master_secret)
-            if encrypted_pms_length != 256:
-                raise ValueError(f"Unexpected Encrypted PreMaster Secret length: {encrypted_pms_length}")
-            print(f"[!] Encrypted Pre-Master Secret length: {encrypted_pms_length}")
-
-            # Step 4: Create the ClientKeyExchange message
-            handshake_message = (
-                b'\x10' + # ClientKeyExchange message type
-                (len(encrypted_pre_master_secret) + 2).to_bytes(3, byteorder='big') +  # Handshake / Total length (including 2 bytes for encrypted_pms_length)
-                encrypted_pms_length.to_bytes(2, byteorder='big') +  # Encrypted PMS length
-                encrypted_pre_master_secret  # Encrypted Pre-Master Secret
-            )
-
-            print(f"Encrypted Pre-Master Secret: {encrypted_pre_master_secret.hex()}")
-            return self.generate_tls_record(handshake_message)
-            
-        if int.from_bytes(self.ctx.AGGREED_CIPHER_SUITE, byteorder='big') == self.ctx.CIPHER_SUITES["TLS_DHE_RSA_WITH_AES_256_GCM_SHA384"]:
-            # Generate private key 'a' (random)
-            private_key = int.from_bytes(os.urandom(32), byteorder="big")
-
-            # Compute client's public key: g^a % p
-            client_public_key = pow(self.ctx.SERVER_PARAMS['g'], private_key, self.ctx.SERVER_PARAMS['p'])
-
-            # Compute shared secret: (server's public key)^a % p
-            shared_secret = pow(
-                self.ctx.SERVER_PARAMS['server_public_key'],
-                private_key,
-                self.ctx.SERVER_PARAMS['p']
-            )
-            
-            # Convert the shared secret to bytes
-            pre_master_secret = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, byteorder='big')
-            
-            # Compute master secret
-            master_secret = pseudo_random_function(
-                pre_master_secret, 
-                b"master secret", 
-                self.ctx.CLIENT_RANDOM + self.ctx.SERVER_RANDOM, 
-                48
-            )
-
-            self.ctx.MASTER_SECRET = master_secret
-            self.ctx.PRE_MASTER_SECRET = pre_master_secret
-            # Prepare the ClientKeyExchange message
-            client_public_key_bytes = client_public_key.to_bytes((client_public_key.bit_length() + 7) // 8, byteorder="big")
-
-            client_public_key_encoded = (
-                len(client_public_key_bytes).to_bytes(2, 'big') + client_public_key_bytes
-            )
-            
-            handshake_message = (
-                b'\x10' +  # ClientKeyExchange
-                len(client_public_key_encoded).to_bytes(3, 'big') +  # Length of body
-                client_public_key_encoded
-            )
-
-            print(f"ClientKeyExchange - public key: {client_public_key_bytes.hex()}")
-            print(f"ClientKeyExchange - msg: {handshake_message.hex()}")
-            return self.generate_tls_record(handshake_message)
-
-
-    def compute_dh_premaster_secret(self):
-        """
-        Compute the pre-master secret for DHE key exchange.
-        For DHE, the pre-master secret is the shared DH secret.
-        """
-        if not hasattr(self.ctx, 'SERVER_PARAMS') or 'private_key' not in self.ctx.SERVER_PARAMS:
-            raise ValueError("DH parameters not found. Server key exchange must happen first.")
-            
-        shared_secret = pow(
-            self.ctx.SERVER_PARAMS['server_public_key'],
-            self.ctx.SERVER_PARAMS['private_key'],
-            self.ctx.SERVER_PARAMS['p']
-        )
-        
-        # Convert the shared secret to bytes
-        return shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, byteorder='big')
-
-
     def generate_change_cipher_spec(self):
         # ChangeCipherSpec message
         change_cipher_spec = b'\x01'  # ChangeCipherSpec message
@@ -475,13 +362,12 @@ class TlsMessageGenerator:
         # We'll let the client code handle encryption state
         return record_type + protocol_version + length + change_cipher_spec # this is a custom record layer
 
-
     def generate_finished(self, pre_master_secret, handshake_messages, is_client=True):
         if int.from_bytes(self.ctx.AGGREED_CIPHER_SUITE, byteorder='big') == self.ctx.CIPHER_SUITES["TLS_RSA_WITH_AES_128_CBC_SHA256"]:
             # Step 1: Hash all handshake messages with SHA-256
             handshake_hash = sha256(handshake_messages).digest()
         else:
-            # Step 1: Hash all handshake messages with SHA-384
+            # TODO: implement every other cipher suites
             handshake_hash = sha384(handshake_messages).digest()        
 
         print(f"Handshake hash: {handshake_hash.hex()}")
@@ -504,13 +390,12 @@ class TlsMessageGenerator:
         # this itself should be encrypted
         return self.generate_tls_record(finished_msg)
 
-
     def generate_tls_record(self, msg, msg_type=b'\x16', protocol_version=b'\x03\x03'):
         """
         Generate a TLS record with the given message and type.
-        Supports both GCM and CBC modes.
-        """
 
+        By default it generates handshake records
+        """
         if self.ctx.ENCRYPT_RECORDS:
             cs = CipherSuite(self.ctx, "TLS_RSA_WITH_AES_128_CBC_SHA256", msg_type)
             full_msg  = cs.encrypt(msg)
@@ -564,6 +449,6 @@ class TlsMessageGenerator:
         """
 
         alert_payload = bytes([level, description])
-        return self.generate_tls_record(alert_payload, msg_type=b'\x15')
+        return self.generate_tls_record(alert_payload, msg_type=b'\x15') # 21
 
 

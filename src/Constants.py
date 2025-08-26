@@ -1,4 +1,6 @@
 class Context:
+
+    SHELLCODE = None # shellcode is empty, by default
     TLS_VERSION = b"\x03\x03" # tls v1.2
     TLS_VERSION_1_2 = b"\x03\x03" # tls v1.2
     TLS_VERSION_1_1 = b"\x03\x02" # tls v1.1

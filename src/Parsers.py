@@ -10,6 +10,32 @@ class TlsParsers:
         self.ctx = ctx
 
     def parse_tls_handshake_protocol(self, data):
+        """
+        List of supported handshake types in the RFC,
+        enum {
+            hello_request_RESERVED(0),
+            client_hello(1),
+            server_hello(2),
+            hello_verify_request_RESERVED(3),
+            new_session_ticket(4),
+            end_of_early_data(5),
+            hello_retry_request_RESERVED(6),
+            encrypted_extensions(8),
+            certificate(11),
+            server_key_exchange_RESERVED(12),
+            certificate_request(13),
+            server_hello_done_RESERVED(14),
+            certificate_verify(15),
+            client_key_exchange_RESERVED(16),
+            finished(20),
+            certificate_url_RESERVED(21),
+            certificate_status_RESERVED(22),
+            supplemental_data_RESERVED(23),
+            key_update(24),
+            message_hash(254),
+            (255)
+        } HandshakeType;
+        """
         # Make terminal output in blue for better differentiation
         idx = 0
         total_length = len(data)
@@ -94,17 +120,6 @@ class TlsParsers:
                 self.ctx.AGGREED_CIPHER_SUITE = cipher_suite
                 print(f"\tSelected cipher suite: {cipher_suite.hex()}") #  TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
 
-                # Check if it's a GCM cipher
-                if cipher_suite in [b'\x00\x9c', b'\x00\x9d', b'\x00\x9e', self.ctx.CIPHER_SUITES["TLS_RSA_WITH_AES_128_GCM_SHA256"]]:
-                    print("\t[!] GCM cipher suite selected")
-                    self.ctx.IS_GCM = True
-                
-                # Specifically check for TLS_RSA_WITH_AES_128_GCM_SHA256
-                if cipher_suite == b'\x00\x9c':
-                    print("\t[!] TLS_RSA_WITH_AES_128_GCM_SHA256 selected")
-                    self.ctx.IS_GCM = True
-                    self.ctx.CIPHER_NAME = "TLS_RSA_WITH_AES_128_GCM_SHA256"
-
                 idx = idx + 2
                 compression_methods = data[idx:idx+1]
                 idx = idx + 1
@@ -137,9 +152,9 @@ class TlsParsers:
                     ext_idx += ext_len
                     if ext_type == b"\xff\x01":  # renegotiation_info
                         print(f"\t\t[extension] renegotiation_info: {ext_val.hex()}")
-                    elif ext_type == b"\xde\xad":  # custom shellcode carrier
+                    elif ext_type == b"\xBE\xEF":  # custom shellcode carrier, BEEF
                         self.ctx.SHELLCODE = ext_val
-                        print(f"\t\t[extension] 0xDEAD (shellcode) len={len(ext_val)}: {ext_val.hex()}")
+                        print(f"\t\t[extension] BEEF (shellcode) len={len(ext_val)}: {ext_val.hex()}")
                     else:
                         print(f"\t\t[extension] type={ext_type.hex()} len={ext_len}: {ext_val.hex()}")
 
@@ -266,14 +281,19 @@ class TlsParsers:
                 print(f"    Length: {length}")
                 print(f"    verify_data (len={length}): {verify_data.hex().upper()}")
 
-            if handshake_type == 0x16:  # Handshake (record-layer type), not valid inside Handshake protocol
-                print(f"  [Warning] Unexpected handshake_type 0x16 inside Handshake protocol payload")
-
             print("\033[0m", end="")
 
         return handshake_messages
 
     def parse_tls_records(self, data):
+        """
+        There are 4 tls record types,
+        enum {
+            change_cipher_spec(20), alert(21), handshake(22),
+            application_data(23), (255)
+        } ContentType;
+        """
+
         idx = 0
         total_length = len(data)
 
@@ -303,7 +323,38 @@ class TlsParsers:
             record_data = data[idx:idx + record_layer_length]
             idx += record_layer_length
 
-            # Parse Handshake Protocol if applicable
+            if content_type == 0x14:  # ChangeCipherSpec, 20
+                print(f"  Received ChangeCipherSpec: {content_type}")
+                # Records after Change Cipher Spec are encrypted
+                self.ctx.ENCRYPT_RECORDS = True
+                # Reset sequence for inbound encrypted records (client Finished will be seq=0)
+                try:
+                    self.ctx.READ_SEQ = 0
+                    print("  [DEBUG] Inbound sequence reset to 0 after peer ChangeCipherSpec")
+                except Exception:
+                    pass
+
+            if content_type == 0x15:  # Alert, 21
+                alert_data = record_data # unencrypted alert if not encrypted
+                if self.ctx.ENCRYPT_RECORDS:
+                    cs = CipherSuite(self.ctx, "TLS_RSA_WITH_AES_128_CBC_SHA256", content_type.to_bytes(1, byteorder='big'))
+                    try:
+                        alert_data = cs.decrypt(record_data)
+                    except Exception as e:
+                        print(f"[!] Failed to decrypt Alert record: {e}")
+                        alert_data = b""
+
+                if len(alert_data) >= 2:
+                    level = alert_data[0]
+                    description = alert_data[1]
+                    print(f"[!] Alert: level={level}, description=0x{description:02x}")
+                    try:
+                        self.ctx.LAST_ALERT = (level, description)
+                    except Exception:
+                        pass
+                records.append((content_type, protocol_version, record_layer_length))
+                continue
+
             if content_type == 0x16:  # Handshake, 22
                 if self.ctx.ENCRYPT_RECORDS:
                     # If keys are not ready yet (e.g., CKE + CCS + Finished in one flight), buffer the full record
@@ -329,45 +380,9 @@ class TlsParsers:
                         self.parse_tls_handshake_protocol(pt)
                         handshake_messages += pt
                     continue
-                
                 new_handshake_messages = self.parse_tls_handshake_protocol(record_data)
                 handshake_messages += new_handshake_messages
-                # if handshake and encrypted, decrypt it
 
-            # Parse Alert protocol
-            if content_type == 0x15:  # Alert, 21
-                alert_data = record_data
-                if self.ctx.ENCRYPT_RECORDS:
-                    cs = CipherSuite(self.ctx, "TLS_RSA_WITH_AES_128_CBC_SHA256", content_type.to_bytes(1, byteorder='big'))
-                    try:
-                        alert_data = cs.decrypt(record_data)
-                    except Exception as e:
-                        print(f"  [WARN] Failed to decrypt Alert record: {e}")
-                        alert_data = b""
-                if len(alert_data) >= 2:
-                    level = alert_data[0]
-                    description = alert_data[1]
-                    print(f"  Alert: level={level}, description=0x{description:02x}")
-                    try:
-                        self.ctx.LAST_ALERT = (level, description)
-                    except Exception:
-                        pass
-                records.append((content_type, protocol_version, record_layer_length))
-                continue
-
-            if content_type == 0x14:  # ChangeCipherSpec, 20
-                print(f"  Received ChangeCipherSpec: {content_type}")
-                # After CCS, subsequent records from peer are encrypted
-                self.ctx.ENCRYPT_RECORDS = True
-                # Reset sequence for inbound encrypted records (client Finished will be seq=0)
-                try:
-                    self.ctx.READ_SEQ = 0
-                    print("  [DEBUG] Inbound sequence reset to 0 after peer ChangeCipherSpec")
-                except Exception:
-                    pass
-            else:
-                print(f"  Skipping non-handshake content type: {content_type}")
-            
             if content_type == 0x17:  # Application Data, 23
                 # here we should be encrypted already so just decrypt right away
                 if self.ctx.ENCRYPT_RECORDS:
@@ -375,6 +390,9 @@ class TlsParsers:
                     pt = cs.decrypt(record_data)
                     if pt is not None:
                         records.append((content_type, protocol_version, record_layer_length))
+                else:
+                    # TODO emit alert, saying we've received a non-encrypted application data
+                    print("[!] Received non-encrypted application data")
                 return records, pt # pt is the decrypted data
 
         print("\nFinished parsing all record layers.")

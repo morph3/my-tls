@@ -141,7 +141,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8443):
                                 print("[<] Received Finished (decrypted)")
                             idx += 4 + l
 
-            # If CCS and Finished were in the same read, parser already set ENCRYPT_RECORDS and parsed Finished
+            # If ChangeCipherSpec and Finished were in the same read, parser already set ENCRYPT_RECORDS and parsed Finished
             for record in records:
                 if record[0] == 0x14:
                     print("[<] Received ChangeCipherSpec")
@@ -149,7 +149,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8443):
             #print(f"Handshake messages:\n\n")
             #hexdump.hexdump(ctx.HANDSHAKE_MESSAGES)
     
-            # Select hash per cipher suite (TLS 1.2: sha256 for 0x003c else sha384)
+            # Select hashing algo based on agreed cipher suite
             hash_func = hashlib.sha256 if int.from_bytes(ctx.AGGREED_CIPHER_SUITE, 'big') == ctx.CIPHER_SUITES["TLS_RSA_WITH_AES_128_CBC_SHA256"] else hashlib.sha384
             handshake_hash = hash_func(ctx.HANDSHAKE_MESSAGES).digest()
             expected = pseudo_random_function(ctx.MASTER_SECRET, b"client finished", handshake_hash, 12, hash_func)
